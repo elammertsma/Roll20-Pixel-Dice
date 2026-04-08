@@ -14,6 +14,9 @@ const ModifiersTab: React.FC = () => {
   const [newName, setNewName] = useState('');
   const [newValue, setNewValue] = useState<string>('');
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editValue, setEditValue] = useState<string>('');
 
   // Load Modifiers
   useEffect(() => {
@@ -56,11 +59,11 @@ const ModifiersTab: React.FC = () => {
   const onDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     if (draggedIndex === null || draggedIndex === index) return;
-    
+
     const newModifiers = [...modifiers];
     const item = newModifiers.splice(draggedIndex, 1)[0];
     newModifiers.splice(index, 0, item);
-    
+
     setDraggedIndex(index);
     setModifiers(newModifiers);
   };
@@ -68,6 +71,38 @@ const ModifiersTab: React.FC = () => {
   const onDragEnd = () => {
     setDraggedIndex(null);
     saveModifiers(modifiers);
+  };
+
+  const startEditing = (mod: CustomModifier) => {
+    setEditingId(mod.id);
+    setEditName(mod.name);
+    setEditValue(mod.value.toString());
+  };
+
+  const handleSaveEdit = (e?: React.FocusEvent) => {
+    if (!editingId) return;
+    
+    // If we're blurring to another element inside the same edit container, don't save yet
+    if (e?.relatedTarget && (e.relatedTarget as HTMLElement).closest('.edit-container')) {
+      return;
+    }
+
+    if (!editName.trim()) {
+      setEditingId(null);
+      return;
+    }
+    const updated = modifiers.map(m => 
+      m.id === editingId 
+        ? { ...m, name: editName.trim(), value: parseInt(editValue) || 0 }
+        : m
+    );
+    saveModifiers(updated);
+    setEditingId(null);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleSaveEdit();
+    if (e.key === 'Escape') setEditingId(null);
   };
 
   return (
@@ -84,25 +119,25 @@ const ModifiersTab: React.FC = () => {
           <div className="flex gap-4 items-end">
             <div className="flex-1 space-y-2">
               <label className="text-[0.65rem] font-black uppercase tracking-widest text-text-muted opacity-50 pl-1">Modifier Name</label>
-              <Input 
-                placeholder="e.g. Bless, Sharpshooter..." 
+              <Input
+                placeholder="e.g. Bless, Sharpshooter..."
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
               />
             </div>
             <div className="w-24 space-y-2">
               <label className="text-[0.65rem] font-black uppercase tracking-widest text-text-muted opacity-50 pl-1">Value</label>
-              <Input 
+              <Input
                 type="number"
-                placeholder="+0" 
+                placeholder="+0"
                 value={newValue}
                 onChange={(e) => setNewValue(e.target.value)}
                 className="text-center font-bold text-accent"
               />
             </div>
-            <Button 
-                onClick={handleAdd}
-                className="bg-accent hover:bg-accent-hover text-white h-[46px] w-[46px] flex items-center justify-center p-0"
+            <Button
+              onClick={handleAdd}
+              className="bg-accent hover:bg-accent-hover text-white h-[46px] w-[46px] flex items-center justify-center p-0"
             >
               <Plus size={24} />
             </Button>
@@ -113,10 +148,9 @@ const ModifiersTab: React.FC = () => {
       {/* List */}
       <section className="space-y-4">
         <div className="flex justify-between items-center px-2">
-          <h3 className="text-xs font-black uppercase tracking-widest text-text-muted/40">Active Modifiers</h3>
-          <span className="text-[0.6rem] font-bold text-text-muted bg-white/5 px-2 py-0.5 rounded uppercase">Reorderable</span>
+          <h3 className="text-xs font-black uppercase tracking-widest text-text-muted/40">Custom Modifiers</h3>
         </div>
-        
+
         {modifiers.length === 0 ? (
           <div className="py-12 border-2 border-dashed border-white/5 rounded-xl flex flex-col items-center justify-center text-center opacity-30">
             <Sparkles size={40} className="mb-4 text-text-muted" />
@@ -132,25 +166,52 @@ const ModifiersTab: React.FC = () => {
                 onDragStart={() => onDragStart(index)}
                 onDragOver={(e) => onDragOver(e, index)}
                 onDragEnd={onDragEnd}
-                className={`flex items-center gap-4 p-4 rounded-xl border border-white/5 group transition-all duration-200 ${
-                  draggedIndex === index 
-                    ? 'opacity-40 bg-accent/10 border-accent/20 scale-95' 
+                className={`flex items-center gap-4 p-4 rounded-xl border border-white/5 group transition-all duration-200 ${draggedIndex === index
+                    ? 'opacity-40 bg-accent/10 border-accent/20 scale-95'
                     : 'bg-surface/60 hover:bg-surface hover:border-white/10'
-                }`}
+                  }`}
               >
                 <div className="cursor-grab active:cursor-grabbing p-1 text-text-muted hover:text-text-main group-hover:bg-white/5 rounded-lg transition-colors">
                   <GripVertical size={20} />
                 </div>
-                
-                <div className="flex-1">
-                  <h4 className="font-bold text-lg leading-none">{mod.name}</h4>
-                </div>
 
-                <div className="text-lg font-black text-accent bg-accent/10 px-4 py-1.5 rounded-lg border border-accent/10 min-w-[3rem] text-center">
-                  {mod.value >= 0 ? `+${mod.value}` : mod.value}
-                </div>
+                {editingId === mod.id ? (
+                  <div className="flex-1 flex items-center gap-3 edit-container">
+                    <Input
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onBlur={handleSaveEdit}
+                      onKeyDown={handleKeyDown}
+                      autoFocus
+                      className="flex-1"
+                    />
+                    <div className="w-24">
+                      <Input
+                        type="number"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onBlur={handleSaveEdit}
+                        onKeyDown={handleKeyDown}
+                        className="text-center font-bold text-accent"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex-1 cursor-text" onClick={() => startEditing(mod)}>
+                      <h4 className="font-bold text-lg leading-none">{mod.name}</h4>
+                    </div>
 
-                <button 
+                    <div 
+                      className="text-lg font-black text-accent bg-accent/10 px-4 py-1.5 rounded-lg border border-accent/10 min-w-[3rem] text-center cursor-text hover:bg-accent/20 transition-colors"
+                      onClick={() => startEditing(mod)}
+                    >
+                      {mod.value >= 0 ? `+${mod.value}` : mod.value}
+                    </div>
+                  </>
+                )}
+
+                <button
                   onClick={() => handleDelete(mod.id)}
                   className="p-2 text-text-muted hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                 >
@@ -160,6 +221,10 @@ const ModifiersTab: React.FC = () => {
             ))}
           </div>
         )}
+
+        <div className="flex justify-between items-center px-2">
+          <span className="text-[0.6rem] font-bold text-text-muted bg-white/5 px-2 py-0.5 rounded uppercase">Reorderable</span>
+        </div>
       </section>
 
       {/* Help Section */}

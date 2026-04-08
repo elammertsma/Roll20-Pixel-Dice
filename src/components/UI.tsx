@@ -44,17 +44,23 @@ export const Input: React.FC<{
   type?: string,
   value?: string,
   onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void,
+  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void,
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void,
   placeholder?: string,
   className?: string,
-  maxLength?: number
-}> = ({ id, type = "text", value, onChange, placeholder, className = "", maxLength }) => (
+  maxLength?: number,
+  autoFocus?: boolean
+}> = ({ id, type = "text", value, onChange, onBlur, onKeyDown, placeholder, className = "", maxLength, autoFocus }) => (
   <input
     id={id}
     type={type}
     value={value}
     onChange={onChange}
+    onBlur={onBlur}
+    onKeyDown={onKeyDown}
     placeholder={placeholder}
     maxLength={maxLength}
+    autoFocus={autoFocus}
     className={`w-full bg-card-bg border border-border-main rounded-lg text-text-main px-3 py-2.5 font-sans text-[0.95rem] transition-colors focus:outline-none focus:border-accent ${className}`}
   />
 );

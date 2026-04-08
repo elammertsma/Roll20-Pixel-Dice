@@ -83,11 +83,11 @@ const SettingsTab: React.FC = () => {
           </SettingRow>
 
           <SettingRow 
-            title="Bluetooth Reconnection Flag" 
-            description="Hide or show the experimental Bluetooth automatic reconnection permission guidance on the Dice tab. (This is always hidden when the Chrome flag is enabled.)" 
+            title="Auto-open Hub with Popup" 
+            description="Automatically open the Pixels Hub in a background tab when the Roll20 popup appears. This ensures your dice can reconnect silently as soon as you enter a game." 
             icon={<Sparkles size={20} />}
           >
-            <Toggle enabled={settings.showSignalIcons} onChange={(v) => updateSetting('showSignalIcons', v)} />
+            <Toggle enabled={settings.autoOpenHub} onChange={(v) => updateSetting('autoOpenHub', v)} />
           </SettingRow>
 
           <SettingRow 
@@ -99,11 +99,11 @@ const SettingsTab: React.FC = () => {
           </SettingRow>
 
           <SettingRow 
-            title="Auto-open Hub with Popup" 
-            description="Automatically open the Pixels Hub in a background tab when the Roll20 popup appears. This ensures your dice can reconnect silently as soon as you enter a game." 
+            title="Bluetooth Reconnection Flag" 
+            description="Hide or show the experimental Bluetooth automatic reconnection permission guidance on the Dice tab. (This is always hidden when the Chrome flag is enabled.)" 
             icon={<Sparkles size={20} />}
           >
-            <Toggle enabled={settings.autoOpenHub} onChange={(v) => updateSetting('autoOpenHub', v)} />
+            <Toggle enabled={settings.showSignalIcons} onChange={(v) => updateSetting('showSignalIcons', v)} />
           </SettingRow>
         </Card>
       </section>
