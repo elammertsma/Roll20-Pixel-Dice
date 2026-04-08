@@ -1,7 +1,17 @@
 # Pixels Dice for Roll20
 ## Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to this project are documented in this file.
+
+## Pixels Dice for Roll20 [3.4.0] - 2026-04-08
+
+### Added
+- **Inline Modifier Editing**: You can now click on a custom modifier's name or value in the Hub to edit it directly.
+- **Improved UI Components**: The shared Input component now supports auto-focus and standard keyboard shortcuts (Enter to save, Escape to cancel).
+
+### Changed
+- **Edit Mode Polish**: Focus management during inline editing now allows switching between name and value inputs without closing the editor.
+- **Improved Performance**: Refined re-rendering logic for the Hub's custom modifier list.
 
 ## Pixels Dice for Roll20 [3.3.0] - 2026-04-07
 

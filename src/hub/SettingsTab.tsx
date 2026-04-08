@@ -128,7 +128,7 @@ const SettingsTab: React.FC = () => {
       </div>*/}
 
       <div className="text-center pt-12">
-        <p className="text-[0.7rem] text-text-muted opacity-30 font-bold uppercase tracking-widest">Pixels Dice for Roll20 • v3.3.0</p>
+        <p className="text-[0.7rem] text-text-muted opacity-30 font-bold uppercase tracking-widest">Pixels Dice for Roll20 • v3.4.0</p>
       </div>
 
       <Modal

@@ -1,6 +1,6 @@
 {
   "name": "pixels-roll20-extension",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "Chrome extension for using Pixels Dice with Roll20",
   "scripts": {
     "build": "webpack --config webpack.config.js",
