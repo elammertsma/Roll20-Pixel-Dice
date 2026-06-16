@@ -136,6 +136,19 @@ function sendEnterKey(element: HTMLElement): void {
   element.dispatchEvent(new KeyboardEvent('keyup', options));
 }
 
+// Serialize injections so simultaneous rolls submit one at a time instead of clobbering the shared chat input.
+let injectionQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueRollCommand(rollMessage: string): Promise<boolean> {
+  const result = injectionQueue.then(async () => {
+    const success = await injectRollCommand(rollMessage);
+    await new Promise(resolve => setTimeout(resolve, 150)); // gap so Roll20 finishes this submit first
+    return success;
+  });
+  injectionQueue = result.catch(() => undefined); // keep the chain alive if one injection rejects
+  return result;
+}
+
 // Listen for dice roll messages from the background service worker
 chrome.runtime.onMessage.addListener((
   message: unknown,
@@ -150,7 +163,7 @@ chrome.runtime.onMessage.addListener((
   };
 
   if (isRollMessage(message)) {
-    injectRollCommand(message.rollMessage || `/roll ${message.face}`).then(success => {
+    enqueueRollCommand(message.rollMessage || `/roll ${message.face}`).then(success => {
       sendResponse({ success });
     });
     return true; // Keep channel open for async response
