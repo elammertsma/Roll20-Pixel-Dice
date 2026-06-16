@@ -426,11 +426,14 @@ class DiceManager {
       const dieLabel = `[1d${dSize}]`;
       
       if (val === dSize) {
-        // Critical Success: Force green color using 1d1cs1 hack
-        return `[[ 1d1cs1cf0${dieLabel} + (${val - 1}) ${mod} ]]`;
+        // Critical Success: 1d1cs1cf0 always "crits" -> forces Roll20's green box.
+        // The label must sit on the (val-1) term, NOT directly on the cs/cf die:
+        // a tag placed right after the crit die swallows the trailing "+ (val-1)",
+        // which made a crit 20 render as 1. Mirrors the normal branch's (val)[label].
+        return `[[ 1d1cs1cf0 + (${val - 1})${dieLabel} ${mod} ]]`;
       } else if (val === 1) {
-        // Critical Failure: Force red color using 1d1cf1 hack 
-        return `[[ 1d1cs0cf1${dieLabel} + (${val - 1}) ${mod} ]]`;
+        // Critical Failure: 1d1cs0cf1 always "fumbles" -> forces Roll20's red box.
+        return `[[ 1d1cs0cf1 + (${val - 1})${dieLabel} ${mod} ]]`;
       } else {
         // Normal roll
         return `[[ (${val})${dieLabel} ${mod} ]]`;
