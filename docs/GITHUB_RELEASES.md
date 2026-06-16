@@ -5,7 +5,7 @@ This guide explains how to distribute the Pixels Dice for Roll20 extension via G
 ## For Users: Installing from GitHub
 
 ### Steps
-1. Go to [GitHub Releases](https://github.com/yourusername/PixelsRoll20ChromeExtension/releases)
+1. Go to [GitHub Releases](https://github.com/elammertsma/Roll20-Pixels-Dice/releases)
 2. Download the latest `pixels-dice-roll20-v*.zip` file
 3. Extract the ZIP file to a folder (e.g., `C:\Extensions\pixels-dice-roll20`)
 4. In Chrome, open `chrome://extensions/`

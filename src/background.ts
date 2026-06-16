@@ -135,6 +135,9 @@ interface PendingRoll {
 let pendingRoll: PendingRoll | null = null;
 let pendingRollTimeout: any = null;
 
+// Window to wait for sibling dice before judging an adv/dis roll (only used when multiple dice are connected).
+const SIMULTANEOUS_WINDOW_MS = 3000;
+
 const STAT_MAP: Record<string, string> = {
   'str': 'strength',
   'dex': 'dexterity',
@@ -248,6 +251,11 @@ class DiceManager {
 
   private lastDiceRolls: Map<string, { face: number; timestamp: number }> = new Map();
 
+  // Buffers adv/dis rolls landing within SIMULTANEOUS_WINDOW_MS so they're judged together.
+  private advBatch: PendingRoll[] = [];
+  private advBatchTimer: any = null;
+  private advBatchCtx: { rollFormula: string; modStr: string; mode: 'advantage' | 'disadvantage'; digitalAdvantage: boolean } | null = null;
+
   async onDieRoll(dieId: string, faceValue: number, dieType: string): Promise<void> {
     const timestamp = Date.now();
     console.log(`[Pixels Roll20] Die rolled: ${dieType} with face ${faceValue} at ${timestamp}`);
@@ -327,62 +335,122 @@ class DiceManager {
           }
         }
 
-        // --- Handle Advantage / Disadvantage ---
-        const mode = config.advantageMode || 'normal';
-        
-        // 1500ms Simultaneous detection (Must be TWO DIFFERENT dice of the same type)
-        if (mode !== 'normal' && pendingRoll && (timestamp - pendingRoll.timestamp < 1500) && (pendingRoll.dieType === dieType) && (pendingRoll.dieId !== dieId)) {
-          console.log('[Pixels Roll20] Simultaneous roll detected, merging.');
-          if (pendingRollTimeout) clearTimeout(pendingRollTimeout);
-          const r1 = pendingRoll.face;
-          const r2 = faceValue;
-          pendingRoll = null;
-          chrome.runtime.sendMessage({ type: 'waitingForSecondRoll', waiting: false }).catch(() => {});
-          this.sendToRoll20(dieId, dieType, rollFormula, r1, r2, mode, modStr);
+        // --- Dispatch based on mode ---
+        const mode = (config.advantageMode || 'normal') as 'normal' | 'advantage' | 'disadvantage';
+
+        if (mode === 'normal') {
+          // One roll per die; content.ts serializes injections so simultaneous results don't clobber each other.
+          this.sendToRoll20(dieId, dieType, rollFormula, faceValue, null, 'normal', modStr);
           return;
         }
 
-        if (mode === 'normal') {
-          this.sendToRoll20(dieId, dieType, rollFormula, faceValue, null, 'normal', modStr);
-        } else {
-          // Advantage or Disadvantage
-          if (settings.digitalAdvantage) {
-            this.sendToRoll20(dieId, dieType, rollFormula, faceValue, null, mode, modStr, true);
-          } else {
-            // Physical Advantage (Sequential)
-            if (!pendingRoll) {
-              pendingRoll = { dieId, face: faceValue, dieType, timestamp };
-              chrome.runtime.sendMessage({ type: 'waitingForSecondRoll', waiting: true }).catch(() => {});
-              
-              // Notify Roll20 that roll 1 is in
-              const die = diceMapCache.get(dieId);
-              this.sendInterimMessage(die ? die.name : 'Pixel Die', faceValue);
-              
-              // Reset after 30s
-              if (pendingRollTimeout) clearTimeout(pendingRollTimeout);
-              pendingRollTimeout = setTimeout(() => {
-                if (pendingRoll) {
-                  console.log('[Pixels Roll20] Advantage timeout, sending single roll.');
-                  this.sendToRoll20(pendingRoll.dieId, pendingRoll.dieType, rollFormula, pendingRoll.face, null, 'normal', modStr);
-                  pendingRoll = null;
-                  chrome.runtime.sendMessage({ type: 'waitingForSecondRoll', waiting: false }).catch(() => {});
-                }
-              }, 30000);
-            } else {
-              // Already have one roll pending (but didn't hit simultaneous window or same die)
-              if (pendingRollTimeout) clearTimeout(pendingRollTimeout);
-              const r1 = pendingRoll.face;
-              const r2 = faceValue;
-              pendingRoll = null;
-              chrome.runtime.sendMessage({ type: 'waitingForSecondRoll', waiting: false }).catch(() => {});
-              this.sendToRoll20(dieId, dieType, rollFormula, r1, r2, mode, modStr);
-            }
-          }
+        const thisRoll: PendingRoll = { dieId, face: faceValue, dieType, timestamp };
+
+        // Single die can't roll two at once, so keep the responsive path (digital or sequential physical).
+        if (diceMapCache.size <= 1) {
+          this.handleSingleAdvRoll(thisRoll, rollFormula, modStr, mode, settings.digitalAdvantage);
+          return;
+        }
+
+        // Multiple dice: collect everything that lands together so processAdvBatch can validate the set.
+        this.advBatchCtx = { rollFormula, modStr, mode, digitalAdvantage: settings.digitalAdvantage };
+        this.advBatch.push(thisRoll);
+        if (!this.advBatchTimer) {
+          this.advBatchTimer = setTimeout(() => this.processAdvBatch(), SIMULTANEOUS_WINDOW_MS);
         }
       } catch (error) {
         console.error('[Pixels Roll20] Error in onDieRoll:', error);
       }
     });
+  }
+
+  // Judge a batch: two matching dice make the pair; mismatched types or 3+ dice get a friendly error.
+  private processAdvBatch(): void {
+    if (this.advBatchTimer) { clearTimeout(this.advBatchTimer); this.advBatchTimer = null; }
+    const batch = this.advBatch;
+    const ctx = this.advBatchCtx;
+    this.advBatch = [];
+    this.advBatchCtx = null;
+    if (!ctx || batch.length === 0) return;
+
+    const { rollFormula, modStr, mode, digitalAdvantage } = ctx;
+
+    // One entry per die (latest face wins) so a die reporting twice isn't counted as two.
+    const byId = new Map<string, PendingRoll>();
+    for (const roll of batch) byId.set(roll.dieId, roll);
+    const dice = Array.from(byId.values());
+
+    if (dice.length >= 3) {
+      this.reportRollError(`Advantage/Disadvantage uses two matching dice — you rolled ${dice.length}. Try rolling just two.`);
+      this.clearPendingRoll();
+      return;
+    }
+
+    if (dice.length === 2) {
+      const [first, second] = dice;
+      if (first.dieType !== second.dieType) {
+        this.reportRollError(`Advantage/Disadvantage needs two matching dice — you rolled a ${first.dieType} and a ${second.dieType}.`);
+        this.clearPendingRoll();
+        return;
+      }
+      this.clearPendingRoll();
+      this.sendToRoll20(second.dieId, second.dieType, rollFormula, first.face, second.face, mode, modStr);
+      return;
+    }
+
+    // Exactly one die landed in the window — treat it as a solo adv/dis roll.
+    this.handleSingleAdvRoll(dice[0], rollFormula, modStr, mode, digitalAdvantage);
+  }
+
+  // A single adv/dis roll: make the digital 2nd die, complete a pending pair, or wait for the 2nd die.
+  private handleSingleAdvRoll(roll: PendingRoll, rollFormula: string, modStr: string, mode: 'advantage' | 'disadvantage', digitalAdvantage: boolean): void {
+    if (digitalAdvantage && !pendingRoll) {
+      this.sendToRoll20(roll.dieId, roll.dieType, rollFormula, roll.face, null, mode, modStr, true);
+      return;
+    }
+
+    if (pendingRoll) {
+      // Second roll of a sequential pair.
+      if (pendingRoll.dieType !== roll.dieType) {
+        this.reportRollError(`Advantage/Disadvantage needs two matching dice — you rolled a ${pendingRoll.dieType} and a ${roll.dieType}.`);
+        this.clearPendingRoll();
+        return;
+      }
+      const firstFace = pendingRoll.face;
+      this.clearPendingRoll();
+      this.sendToRoll20(roll.dieId, roll.dieType, rollFormula, firstFace, roll.face, mode, modStr);
+      return;
+    }
+
+    // First roll of a sequential pair: announce it and wait for the second.
+    pendingRoll = { ...roll };
+    chrome.runtime.sendMessage({ type: 'waitingForSecondRoll', waiting: true }).catch(() => {});
+    const die = diceMapCache.get(roll.dieId);
+    this.sendInterimMessage(die ? die.name : 'Pixel Die', roll.face);
+
+    if (pendingRollTimeout) clearTimeout(pendingRollTimeout);
+    pendingRollTimeout = setTimeout(() => {
+      if (pendingRoll) {
+        console.log('[Pixels Roll20] Advantage timeout, sending single roll.');
+        this.sendToRoll20(pendingRoll.dieId, pendingRoll.dieType, rollFormula, pendingRoll.face, null, 'normal', modStr);
+        this.clearPendingRoll();
+      }
+    }, 30000);
+  }
+
+  /** Clear any pending sequential roll and reset the popup's "waiting" indicator. */
+  private clearPendingRoll(): void {
+    if (pendingRollTimeout) { clearTimeout(pendingRollTimeout); pendingRollTimeout = null; }
+    if (pendingRoll) {
+      pendingRoll = null;
+      chrome.runtime.sendMessage({ type: 'waitingForSecondRoll', waiting: false }).catch(() => {});
+    }
+  }
+
+  /** Surface a friendly, briefly-shown error in the popup (matches existing rollError handling). */
+  private reportRollError(message: string): void {
+    console.warn('[Pixels Roll20]', message);
+    chrome.runtime.sendMessage({ type: 'rollError', error: message }).catch(() => {});
   }
 
   private sendInterimMessage(dieName: string, faceValue: number): void {
@@ -426,13 +494,11 @@ class DiceManager {
       const dieLabel = `[1d${dSize}]`;
       
       if (val === dSize) {
-        // Critical Success: 1d1cs1cf0 always "crits" -> forces Roll20's green box.
-        // The label must sit on the (val-1) term, NOT directly on the cs/cf die:
-        // a tag placed right after the crit die swallows the trailing "+ (val-1)",
-        // which made a crit 20 render as 1. Mirrors the normal branch's (val)[label].
+        // Crit success: 1d1cs1cf0 always "crits" (green box). Label goes on (val-1), not the
+        // die. A tag right after the crit die swallows the trailing "+ (val-1)", showing 1.
         return `[[ 1d1cs1cf0 + (${val - 1})${dieLabel} ${mod} ]]`;
       } else if (val === 1) {
-        // Critical Failure: 1d1cs0cf1 always "fumbles" -> forces Roll20's red box.
+        // Crit fail: 1d1cs0cf1 always "fumbles" (red box).
         return `[[ 1d1cs0cf1 + (${val - 1})${dieLabel} ${mod} ]]`;
       } else {
         // Normal roll
