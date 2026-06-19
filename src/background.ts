@@ -230,19 +230,14 @@ class DiceManager {
 
     console.log(`[Pixels Roll20 Hub] Disconnected die: ${dieId}`);
 
-    // Remove from saved dice so it doesn't auto connect
-    chrome.storage.local.get(['savedDice'], (result) => {
-      const saved = result.savedDice || [];
-      const updated = saved.filter((id: string) => id !== dieId);
-      chrome.storage.local.set({ savedDice: updated });
-    });
-
-    // Tell Hub tab
+    // Tell the Hub tab to drop the live Bluetooth connection and forget the saved
+    // die. The Hub owns savedDice (keyed by systemId), so it does the cleanup —
+    // we forward by pixelId, which is what the popup knows the die by.
     if (cachedHubTabId !== null) {
       chrome.tabs.sendMessage(cachedHubTabId, {
         target: 'bridge',
-        type: 'disconnectPixel',
-        systemId: dieId
+        type: 'forgetByPixelId',
+        pixelId: dieId
       }).catch(() => {
         console.log('[Pixels Roll20 Hub] Hub tab might already be closed');
       });
@@ -592,7 +587,7 @@ chrome.runtime.onMessage.addListener((
 
   switch (msg.type) {
     case 'registerDie':
-      diceManager.registerDie(msg.dieId, msg.dieName, msg.dieType);
+      diceManager.registerDie(msg.dieId, msg.dieName, msg.dieType, msg.colorway);
       sendResponse({ success: true });
       return false;
 

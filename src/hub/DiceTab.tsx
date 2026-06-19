@@ -1,121 +1,259 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Pixel } from "@systemic-games/pixels-core-connect";
 import { repeatConnect, getPixel, requestPixel } from "@systemic-games/pixels-web-connect";
-import { Button, Card, PhysicalDie, DieRow, SignalIcon, Logo, Modal } from '../components/UI';
-import { Plus, Bluetooth, Info, ShieldAlert, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Button, Card, DieRow, Modal } from '../components/UI';
+import { Plus, Bluetooth, Info, CheckCircle2, RefreshCw } from 'lucide-react';
+
+// Persistent record of a die the user has paired. systemId is the stable per-device
+// id used to (re)connect; the rest is cached so disconnected dice still render nicely.
+interface SavedDie {
+  systemId: string;
+  pixelId?: string;
+  name?: string;
+  dieType?: string;
+  colorway?: string;
+  battery?: number;
+}
+
+// Auto-reconnect backoff bounds (ms).
+const RECONNECT_MIN_DELAY = 3000;
+const RECONNECT_MAX_DELAY = 30000;
+// How often we re-scan granted devices to pick up dice that were woken/brought back in range.
+const REDISCOVER_INTERVAL = 15000;
+
+function normalizeSaved(raw: unknown): SavedDie[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => (typeof entry === 'string' ? { systemId: entry } : entry))
+    .filter((d): d is SavedDie => !!d && typeof d.systemId === 'string');
+}
 
 const DiceTab: React.FC = () => {
   const [activeDice, setActiveDice] = useState<Map<string, Pixel>>(new Map());
+  const [saved, setSaved] = useState<SavedDie[]>([]);
+  const [reconnecting, setReconnecting] = useState<Set<string>>(new Set());
   const [isPairing, setIsPairing] = useState<boolean>(false);
   const [showBluetoothFlag, setShowBluetoothFlag] = useState<boolean>(false);
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const [hubDice, setHubDice] = useState<any[]>([]);
   const [connectError, setConnectError] = useState<string | null>(null);
-  
+
   const activeDiceRef = useRef(activeDice);
-  useEffect(() => {
-    activeDiceRef.current = activeDice;
-  }, [activeDice]);
+  useEffect(() => { activeDiceRef.current = activeDice; }, [activeDice]);
+
+  const savedRef = useRef(saved);
+  useEffect(() => { savedRef.current = saved; }, [saved]);
+
+  // Dice the user has explicitly removed this session — never auto-reconnect these.
+  const suppressedRef = useRef<Set<string>>(new Set());
+  // Listeners are attached once per Pixel instance (getPixel returns the same instance).
+  const listenersAttachedRef = useRef<Set<string>>(new Set());
+  // Pending backoff timers and the current backoff delay per die.
+  const reconnectTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const backoffRef = useRef<Map<string, number>>(new Map());
 
   const updateUI = useCallback(() => {
     setActiveDice(prev => new Map(prev));
   }, []);
 
-  const setupPixelListeners = useCallback((pixel: Pixel) => {
-    // Roll event handler
-    const rollHandler = (faceIndex: number) => {
+  // Mirror of `reconnecting` for use inside long-lived listeners without stale closures.
+  const reconnectingRef = useRef<Set<string>>(new Set());
+
+  const markReconnecting = useCallback((systemId: string, on: boolean) => {
+    const next = new Set(reconnectingRef.current);
+    if (on) next.add(systemId); else next.delete(systemId);
+    reconnectingRef.current = next;
+    setReconnecting(next);
+  }, []);
+
+  // ---- Saved-dice persistence ---------------------------------------------
+
+  const refreshSaved = useCallback(async (): Promise<SavedDie[]> => {
+    const result = await chrome.storage.local.get(['savedDice']);
+    const list = normalizeSaved(result.savedDice);
+    setSaved(list);
+    return list;
+  }, []);
+
+  const upsertSaved = useCallback(async (entry: SavedDie) => {
+    const result = await chrome.storage.local.get(['savedDice']);
+    const list = normalizeSaved(result.savedDice);
+    const idx = list.findIndex(d => d.systemId === entry.systemId);
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...entry };
+    } else {
+      list.push(entry);
+    }
+    await chrome.storage.local.set({ savedDice: list });
+    setSaved(list);
+  }, []);
+
+  const removeSaved = useCallback(async (systemId: string) => {
+    const result = await chrome.storage.local.get(['savedDice']);
+    const list = normalizeSaved(result.savedDice).filter(d => d.systemId !== systemId);
+    await chrome.storage.local.set({ savedDice: list });
+    setSaved(list);
+  }, []);
+
+  // ---- Reconnect scheduling ------------------------------------------------
+
+  const clearReconnectTimer = useCallback((systemId: string) => {
+    const t = reconnectTimersRef.current.get(systemId);
+    if (t) {
+      clearTimeout(t);
+      reconnectTimersRef.current.delete(systemId);
+    }
+  }, []);
+
+  // connectWithRetry is defined below; this ref breaks the declaration cycle with scheduleReconnect.
+  const connectRef = useRef<(systemId: string, manual: boolean) => Promise<boolean>>();
+
+  const scheduleReconnect = useCallback((systemId: string) => {
+    if (suppressedRef.current.has(systemId)) return;
+    if (reconnectTimersRef.current.has(systemId)) return; // already queued
+    const delay = backoffRef.current.get(systemId) ?? RECONNECT_MIN_DELAY;
+    backoffRef.current.set(systemId, Math.min(delay * 2, RECONNECT_MAX_DELAY));
+    const timer = setTimeout(() => {
+      reconnectTimersRef.current.delete(systemId);
+      connectRef.current?.(systemId, false);
+    }, delay);
+    reconnectTimersRef.current.set(systemId, timer);
+  }, []);
+
+  // ---- Pixel event wiring --------------------------------------------------
+
+  const setupPixelListeners = useCallback((pixel: Pixel, systemId: string) => {
+    const dieId = () => pixel.pixelId?.toString() || 'unknown';
+
+    pixel.addEventListener('roll', (faceIndex: number) => {
       console.log('[Pixels Roll20 Hub] 🎲 Roll event received:', faceIndex);
       chrome.runtime.sendMessage({
         type: 'diceRoll',
-        dieId: pixel.pixelId?.toString() || 'unknown',
+        dieId: dieId(),
         face: faceIndex,
         dieType: pixel.type || 'd20'
       }).catch(err => console.error('[Pixels Roll20] Failed to send roll:', err));
-    };
-    pixel.addEventListener('roll', rollHandler);
+    });
 
-    // Roll state handler
-    const rollStateHandler = (rollState: any) => {
+    pixel.addEventListener('rollState', (rollState: any) => {
       const state = rollState?.state;
       const isRolling = state === 'rolling' || state === 'handling';
-      
       chrome.runtime.sendMessage({
         type: 'dieStatus',
-        dieId: pixel.pixelId?.toString() || 'unknown',
+        dieId: dieId(),
         isRolling,
         status: state === 'crooked' ? 'crooked' : pixel.status
       }).catch(() => { });
-    };
-    pixel.addEventListener('rollState', rollStateHandler);
+    });
 
-    // Battery handler
-    const batteryHandler = () => {
+    pixel.addEventListener('battery', () => {
       chrome.runtime.sendMessage({
         type: 'updateDieBattery',
-        dieId: pixel.pixelId?.toString() || 'unknown',
+        dieId: dieId(),
         battery: pixel.batteryLevel,
         isCharging: pixel.isCharging
       }).catch(() => { });
+      upsertSaved({ systemId, battery: pixel.batteryLevel });
       updateUI();
-    };
-    pixel.addEventListener('battery', batteryHandler);
+    });
 
-    // Status handler
-    const statusHandler = (status: string) => {
+    pixel.addEventListener('statusChanged', (ev: any) => {
+      const status = ev?.status;
       chrome.runtime.sendMessage({
         type: 'dieStatus',
-        dieId: pixel.pixelId?.toString() || 'unknown',
-        isRolling: (pixel as any).rollState === 'rolling',
-        status: status
+        dieId: dieId(),
+        isRolling: false,
+        status
       }).catch(() => { });
-      updateUI();
-    };
-    pixel.addEventListener('statusChanged', (ev: any) => statusHandler(ev.status));
 
-    // RSSI handler
-    const rssiHandler = (ev: { rssi: number }) => {
+      if (status === 'ready') {
+        // A clean connection resets the backoff so the next drop retries quickly.
+        backoffRef.current.delete(systemId);
+        clearReconnectTimer(systemId);
+      } else if (status === 'disconnected') {
+        // Unexpected drop: keep the die visible and start trying to get it back,
+        // unless the user removed it or we're already mid-attempt.
+        if (!suppressedRef.current.has(systemId) && !reconnectingRef.current.has(systemId)) {
+          scheduleReconnect(systemId);
+        }
+      }
+      updateUI();
+    });
+
+    (pixel as any).addEventListener('rssi', (ev: { rssi: number }) => {
       chrome.runtime.sendMessage({
         type: 'dieStatus',
-        dieId: pixel.pixelId?.toString() || 'unknown',
+        dieId: dieId(),
         status: pixel.status,
         rssi: ev.rssi
       }).catch(() => { });
       updateUI();
-    };
-    (pixel as any).addEventListener('rssi', rssiHandler);
-  }, [updateUI]);
+    });
+  }, [updateUI, upsertSaved, scheduleReconnect, clearReconnectTimer]);
 
-  const handleConnectRequest = useCallback(async (systemId: string) => {
-    if (activeDiceRef.current.has(systemId)) {
-      console.log('[Pixels Roll20] Already connected to:', systemId);
-      return true;
+  // ---- Connection ----------------------------------------------------------
+
+  const friendlyError = (error: any): string => {
+    let msg = error?.message || String(error);
+    if (msg.includes('out of range') || msg.includes('code 19') || msg.includes('GATT')) {
+      msg = "Your Pixel is out of range or turned off. Pick it up or give it a shake to wake it, then try again.";
     }
+    return msg;
+  };
 
-    console.log('[Pixels Roll20 Hub] Connecting to:', systemId);
-    let pixel: Pixel | undefined;
+  const connectWithRetry = useCallback(async (systemId: string, manual: boolean): Promise<boolean> => {
+    if (suppressedRef.current.has(systemId)) return false;
+
+    const existing = activeDiceRef.current.get(systemId);
+    if (existing && existing.status === 'ready') return true;
+    if (reconnectingRef.current.has(systemId) && !manual) return false;
+
+    markReconnecting(systemId, true);
+    clearReconnectTimer(systemId);
+
     try {
-      pixel = await getPixel(systemId);
-      if (!pixel) return false;
+      const pixel = existing ?? await getPixel(systemId);
+      if (!pixel) {
+        throw new Error('This die is no longer available to the browser. Try pairing it again.');
+      }
 
+      console.log('[Pixels Roll20 Hub] Connecting to:', systemId);
       await repeatConnect(pixel, { retries: 3 });
-      
+
+      // Success: reset backoff and register everywhere.
+      backoffRef.current.delete(systemId);
       setActiveDice(prev => {
         const next = new Map(prev);
-        next.set(systemId, pixel!);
+        next.set(systemId, pixel);
         return next;
       });
 
       const dieIdStr = pixel.pixelId?.toString() || 'unknown';
+      const dieType = (pixel as any).dieType || 'd20';
+
       chrome.runtime.sendMessage({
         type: 'registerDie',
         dieId: dieIdStr,
         dieName: pixel.name,
-        dieType: (pixel as any).dieType || 'd20',
+        dieType,
         colorway: pixel.colorway
       }).catch(() => { });
 
+      await upsertSaved({
+        systemId,
+        pixelId: dieIdStr,
+        name: pixel.name,
+        dieType,
+        colorway: pixel.colorway,
+        battery: pixel.batteryLevel
+      });
+
+      if (!listenersAttachedRef.current.has(systemId)) {
+        setupPixelListeners(pixel, systemId);
+        listenersAttachedRef.current.add(systemId);
+      }
+
       pixel.reportRssi(true, 5000).catch(() => { });
-      setupPixelListeners(pixel);
 
       chrome.runtime.sendMessage({
         type: 'dieStatus',
@@ -125,76 +263,133 @@ const DiceTab: React.FC = () => {
       }).catch(() => { });
 
       return true;
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Pixels Roll20] Connection error:', error);
-      let errorMsg = error.message || String(error);
-      if (errorMsg.includes('out of range') || errorMsg.includes('code 19')) {
-        errorMsg = "Your Pixel is out of range or turned off. Please bring it closer and try again.";
-      }
-      setConnectError(errorMsg);
+      if (manual) setConnectError(friendlyError(error));
+      // Keep trying quietly in the background until the die comes back.
+      scheduleReconnect(systemId);
       return false;
+    } finally {
+      markReconnecting(systemId, false);
     }
-  }, [setupPixelListeners]);
+  }, [markReconnecting, clearReconnectTimer, upsertSaved, setupPixelListeners, scheduleReconnect]);
 
-  const handleDisconnect = useCallback((systemId: string) => {
-    const pixel = activeDice.get(systemId);
-    if (pixel) {
-      pixel.disconnect().catch(console.error);
-      setActiveDice(prev => {
-        const next = new Map(prev);
-        next.delete(systemId);
-        return next;
-      });
-      chrome.runtime.sendMessage({
-        type: 'disconnect',
-        dieId: pixel.pixelId.toString()
-      });
+  // Expose the latest connectWithRetry to scheduleReconnect's timer callback.
+  useEffect(() => { connectRef.current = connectWithRetry; }, [connectWithRetry]);
+
+  const handleReconnect = useCallback((systemId: string) => {
+    suppressedRef.current.delete(systemId);
+    backoffRef.current.delete(systemId);
+    connectWithRetry(systemId, true);
+  }, [connectWithRetry]);
+
+  // Forget a die entirely: disconnect, stop auto-reconnecting, drop it from
+  // storage and revoke the browser permission so it isn't rediscovered.
+  const handleForget = useCallback(async (systemId: string) => {
+    suppressedRef.current.add(systemId);
+    clearReconnectTimer(systemId);
+    backoffRef.current.delete(systemId);
+    listenersAttachedRef.current.delete(systemId);
+
+    const pixel = activeDiceRef.current.get(systemId);
+    const savedEntry = savedRef.current.find(d => d.systemId === systemId);
+    const pixelId = pixel?.pixelId?.toString() || savedEntry?.pixelId;
+
+    if (pixel) pixel.disconnect().catch(() => { });
+    if (pixelId) chrome.runtime.sendMessage({ type: 'disconnect', dieId: pixelId }).catch(() => { });
+
+    setActiveDice(prev => {
+      const next = new Map(prev);
+      next.delete(systemId);
+      return next;
+    });
+
+    await removeSaved(systemId);
+
+    try {
+      const nav = navigator as any;
+      if (nav.bluetooth?.getDevices) {
+        const devices = await nav.bluetooth.getDevices();
+        const device = devices.find((d: any) => d.id === systemId);
+        if (device?.forget) await device.forget();
+      }
+    } catch (e) {
+      console.log('[Pixels Roll20] Could not forget device permission:', e);
     }
-  }, [activeDice]);
+  }, [clearReconnectTimer, removeSaved]);
 
-  const startPairing = async () => {
+  const startPairing = useCallback(async () => {
     setIsPairing(true);
     try {
       const pixel = await requestPixel();
       if (pixel) {
-        const result = await chrome.storage.local.get(['savedDice']);
-        const saved = result.savedDice || [];
-        if (!saved.includes(pixel.systemId)) {
-          saved.push(pixel.systemId);
-          await chrome.storage.local.set({ savedDice: saved });
-        }
-        await handleConnectRequest(pixel.systemId);
+        suppressedRef.current.delete(pixel.systemId);
+        await upsertSaved({ systemId: pixel.systemId, name: pixel.name });
+        await connectWithRetry(pixel.systemId, true);
       }
     } catch (error: any) {
       console.error('[Pixels Roll20] Pairing failed:', error);
+      if (!String(error?.message || '').toLowerCase().includes('cancelled')) {
+        setConnectError(friendlyError(error));
+      }
     } finally {
       setIsPairing(false);
     }
-  };
+  }, [upsertSaved, connectWithRetry]);
+
+  // ---- Discovery -----------------------------------------------------------
+
+  const discoverAndConnect = useCallback(async () => {
+    const nav = navigator as any;
+    if (!nav.bluetooth || !nav.bluetooth.getDevices) {
+      setShowBluetoothFlag(true);
+      return;
+    }
+
+    let granted: any[] = [];
+    try {
+      granted = await nav.bluetooth.getDevices();
+    } catch (e) {
+      console.error('[Pixels Roll20] Discovery error:', e);
+      return;
+    }
+
+    const savedList = await refreshSaved();
+    const savedIds = new Set(savedList.map(d => d.systemId));
+    const grantedIds = new Set(granted.map(d => d.id));
+
+    // First run with granted devices but nothing saved yet (e.g. upgrading from an
+    // older version): adopt them so they keep working and auto-reconnecting.
+    if (savedIds.size === 0 && grantedIds.size > 0) {
+      for (const device of granted) {
+        if (suppressedRef.current.has(device.id)) continue; // don't re-adopt a just-forgotten die
+        await upsertSaved({ systemId: device.id, name: device.name });
+        savedIds.add(device.id);
+      }
+    }
+
+    for (const systemId of savedIds) {
+      if (suppressedRef.current.has(systemId)) continue;
+      if (!grantedIds.has(systemId)) continue; // permission no longer present
+      const existing = activeDiceRef.current.get(systemId);
+      if (existing && existing.status === 'ready') continue;
+      if (reconnectTimersRef.current.has(systemId)) continue; // backoff already pending
+      connectWithRetry(systemId, false);
+    }
+  }, [refreshSaved, upsertSaved, connectWithRetry]);
 
   useEffect(() => {
-    const autoDiscover = async () => {
-      const nav = navigator as any;
-      if (!nav.bluetooth || !nav.bluetooth.getDevices) {
-        setShowBluetoothFlag(true);
-        return;
-      }
-      try {
-        const authorized = await nav.bluetooth.getDevices();
-        for (const device of authorized) {
-          if (!activeDiceRef.current.has(device.id)) {
-            handleConnectRequest(device.id);
-          }
-        }
-      } catch (e) { }
-    };
-    autoDiscover();
+    refreshSaved();
+    discoverAndConnect();
+
+    // Periodically re-scan so dice that were off/out of range reconnect on their own.
+    const interval = setInterval(discoverAndConnect, REDISCOVER_INTERVAL);
 
     chrome.runtime.sendMessage({ type: 'getDiceStatus' }, (response) => {
       if (Array.isArray(response)) setHubDice(response);
     });
 
-    const messageListener = (message: any, sender: any, sendResponse: any) => {
+    const messageListener = (message: any, _sender: any, sendResponse: any) => {
       if (message.type === 'diceStatusUpdate' && Array.isArray(message.dice)) {
         setHubDice(message.dice);
         return;
@@ -205,13 +400,38 @@ const DiceTab: React.FC = () => {
         });
       }
       if (message.type === 'connectToPixel') {
-        handleConnectRequest(message.systemId).then(success => sendResponse({ success }));
+        handleReconnect(message.systemId);
+        sendResponse({ success: true });
         return true;
+      }
+      // Popup-initiated disconnect arrives keyed by pixelId.
+      if (message.type === 'forgetByPixelId') {
+        const entry = savedRef.current.find(d => d.pixelId === String(message.pixelId));
+        let systemId = entry?.systemId;
+        if (!systemId) {
+          for (const [sid, p] of activeDiceRef.current) {
+            if (p.pixelId?.toString() === String(message.pixelId)) { systemId = sid; break; }
+          }
+        }
+        if (systemId) handleForget(systemId);
+        sendResponse({ success: true });
+        return false;
       }
     };
     chrome.runtime.onMessage.addListener(messageListener);
-    return () => chrome.runtime.onMessage.removeListener(messageListener);
-  }, [handleConnectRequest]);
+
+    return () => {
+      clearInterval(interval);
+      chrome.runtime.onMessage.removeListener(messageListener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Clean up any pending reconnect timers on unmount.
+  useEffect(() => {
+    const timers = reconnectTimersRef.current;
+    return () => { timers.forEach(clearTimeout); timers.clear(); };
+  }, []);
 
   const copyFlag = () => {
     const url = 'chrome://flags/#enable-web-bluetooth-new-permissions-backend';
@@ -220,6 +440,35 @@ const DiceTab: React.FC = () => {
       setTimeout(() => setIsCopied(false), 2000);
     });
   };
+
+  // ---- Render --------------------------------------------------------------
+
+  // Merge live connections with saved-but-disconnected dice into one list.
+  const rowIds = Array.from(new Set([...saved.map(d => d.systemId), ...Array.from(activeDice.keys())]));
+
+  const rows = rowIds.map((systemId) => {
+    const pixel = activeDice.get(systemId);
+    const info = saved.find(d => d.systemId === systemId);
+    const pixelId = pixel?.pixelId?.toString() || info?.pixelId;
+    const hubDie = pixelId ? hubDice.find(d => d.dieId === pixelId) : undefined;
+    const isReconnecting = reconnecting.has(systemId);
+    const status = pixel ? (hubDie?.status || pixel.status) : 'disconnected';
+
+    const die = {
+      dieId: pixelId || systemId,
+      name: pixel?.name || info?.name || 'Pixels Die',
+      dieType: (pixel as any)?.dieType || info?.dieType || 'd20',
+      battery: pixel?.batteryLevel ?? hubDie?.battery ?? info?.battery ?? 0,
+      isCharging: pixel?.isCharging ?? false,
+      rssi: (pixel as any)?.rssi ?? hubDie?.rssi,
+      status,
+      colorway: pixel?.colorway || info?.colorway,
+      isRolling: hubDie?.isRolling ?? false,
+      lastResult: hubDie?.lastResult
+    };
+
+    return { systemId, die, isReconnecting };
+  });
 
   return (
     <div className="space-y-12">
@@ -235,35 +484,22 @@ const DiceTab: React.FC = () => {
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {Array.from(activeDice.values()).length === 0 ? (
+        {rows.length === 0 ? (
           <div className="col-span-2 text-center py-20 bg-surface/30 rounded-3xl border-2 border-dashed border-white/5">
             <Bluetooth size={48} className="mx-auto text-text-muted opacity-20 mb-4" />
-            <p className="text-text-muted italic">No dice connected in this hub session.</p>
+            <p className="text-text-muted italic">No dice paired yet. Click “Pair New Die” to get started.</p>
           </div>
         ) : (
-          Array.from(activeDice.values()).map(pixel => {
-            const hubDie = hubDice.find(d => d.dieId === pixel.pixelId.toString());
-            const mergedDie = {
-              ...hubDie,
-              dieId: pixel.pixelId.toString(),
-              name: pixel.name,
-              dieType: (pixel as any).dieType || 'd20',
-              battery: pixel.batteryLevel,
-              isCharging: pixel.isCharging,
-              rssi: (pixel as any).rssi,
-              status: hubDie?.status || pixel.status,
-              colorway: pixel.colorway
-            };
-
-            return (
-              <DieRow
-                key={pixel.systemId}
-                die={mergedDie}
-                onDisconnect={() => handleDisconnect(pixel.systemId)}
-                showSignal={true}
-              />
-            );
-          })
+          rows.map(({ systemId, die, isReconnecting }) => (
+            <DieRow
+              key={systemId}
+              die={die}
+              onDisconnect={() => handleForget(systemId)}
+              onReconnect={() => handleReconnect(systemId)}
+              isReconnecting={isReconnecting}
+              showSignal={true}
+            />
+          ))
         )}
       </div>
 
@@ -272,9 +508,9 @@ const DiceTab: React.FC = () => {
           <div className="flex gap-4">
             <Info className="text-warning shrink-0" size={24} />
             <div className="text-sm">
-              <strong className="block mb-1 text-warning uppercase font-black text-xs tracking-widest">Optional: Automatic Reconnection</strong>
+              <strong className="block mb-1 text-warning uppercase font-black text-xs tracking-widest">Optional: Persistent Reconnection</strong>
               <p className="text-text-muted leading-relaxed mb-4">
-                To enable silent, automatic reconnection, you can enable this Chrome flag:
+                Dice reconnect automatically while this tab is open. To let the browser remember them across full restarts, enable this Chrome flag:
               </p>
               <div className="bg-black/50 p-3 rounded-xl flex items-center justify-between font-mono text-xs mb-3 border border-white/5">
                 <span className="truncate mr-4 opacity-70 italic">chrome://flags/#enable-web-bluetooth-new-permissions-backend</span>
@@ -293,7 +529,7 @@ const DiceTab: React.FC = () => {
         onClose={() => setConnectError(null)}
         title="Connection Error"
         variant="warning"
-        actions={<Button onClick={() => setConnectError(null)}>Retry</Button>}
+        actions={<Button onClick={() => setConnectError(null)}>Got it</Button>}
       >
         <p>{connectError}</p>
       </Modal>

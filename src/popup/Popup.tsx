@@ -288,6 +288,10 @@ const Popup: React.FC = () => {
 
   const handleConnectDie = () => handleOpenHub('dice', 'action=pair');
 
+  // Reconnecting happens in the Hub (it owns the Bluetooth connections); opening the
+  // dice tab remounts/focuses it, which kicks off automatic reconnection of saved dice.
+  const handleReconnectDie = () => handleOpenHub('dice');
+
   const handleDisconnect = async (dieId: string) => {
     try {
       await chrome.runtime.sendMessage({ type: 'disconnect', dieId });
@@ -318,25 +322,47 @@ const Popup: React.FC = () => {
         </Button>
       </div>
 
-      <div className="bg-white/2 border border-white/5 rounded-2xl p-3 flex items-center justify-between shadow-none mb-6">
-        <div className="flex items-center gap-3 overflow-visible">
-          <span className="text-[0.8rem] font-black uppercase tracking-[0.2em] text-text-muted opacity-80 whitespace-nowrap">Connected:</span>
-          <div className="flex gap-4 overflow-visible no-scrollbar py-1">
-            {diceList.filter(d => d.status !== 'disconnected').length === 0 ? (
-              <span className="text-[0.8rem] font-black uppercase tracking-widest text-text-muted opacity-40">No dice connected.</span>
-            ) : (
-              diceList.filter(d => d.status !== 'disconnected').map(die => <DieLabel key={die.dieId} die={die} />)
+      {(() => {
+        const connectedDice = diceList.filter(d => d.status !== 'disconnected');
+        const disconnectedDice = diceList.filter(d => d.status === 'disconnected');
+        return (
+          <div className="bg-white/2 border border-white/5 rounded-2xl p-3 mb-6 shadow-none space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 overflow-visible">
+                <span className="text-[0.8rem] font-black uppercase tracking-[0.2em] text-text-muted opacity-80 whitespace-nowrap">Connected:</span>
+                <div className="flex gap-4 overflow-visible no-scrollbar py-1">
+                  {connectedDice.length === 0 ? (
+                    <span className="text-[0.8rem] font-black uppercase tracking-widest text-text-muted opacity-40">No dice connected.</span>
+                  ) : (
+                    connectedDice.map(die => <DieLabel key={die.dieId} die={die} />)
+                  )}
+                </div>
+              </div>
+              <Button
+                onClick={handleConnectDie}
+                className="w-8 h-8 !p-0 rounded-full flex-shrink-0 shadow-lg shadow-accent/20"
+                title="Add Dice"
+              >
+                <Plus size={18} />
+              </Button>
+            </div>
+
+            {disconnectedDice.length > 0 && (
+              <button
+                onClick={handleReconnectDie}
+                title="Reconnect saved dice in the Hub"
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-xl bg-white/2 hover:bg-accent/10 border border-transparent hover:border-accent/20 transition-colors group"
+              >
+                <RefreshCw size={13} className="text-accent group-hover:rotate-180 transition-transform duration-300 shrink-0" />
+                <span className="text-[0.65rem] font-black uppercase tracking-widest text-accent shrink-0">Reconnect</span>
+                <span className="flex gap-3 overflow-hidden opacity-60">
+                  {disconnectedDice.map(die => <DieLabel key={die.dieId} die={die} />)}
+                </span>
+              </button>
             )}
           </div>
-        </div>
-        <Button
-          onClick={handleConnectDie}
-          className="w-8 h-8 !p-0 rounded-full flex-shrink-0 shadow-lg shadow-accent/20"
-          title="Add Dice"
-        >
-          <Plus size={18} />
-        </Button>
-      </div>
+        );
+      })()}
 
       {/* Modifiers Section */}
       <Card className="p-4">

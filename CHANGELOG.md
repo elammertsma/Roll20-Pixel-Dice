@@ -3,6 +3,24 @@
 
 All notable changes to this project are documented in this file.
 
+## Pixels Dice for Roll20 [3.5.0] - 2026-06-19
+
+Connection refactor focused on making dice connect, stay connected, and reconnect with as little effort as possible.
+
+### Added
+- **Automatic Reconnection**: When a die drops (sleeps, goes out of range, or has a Bluetooth hiccup) the Hub now keeps it visible and quietly reconnects on its own using an exponential backoff. No more reopening the Hub or re-pairing for a die that briefly disconnected.
+- **Periodic Rediscovery**: The Hub re-scans your saved dice every few seconds, so a die that you turn on (or shake awake) after opening the Hub connects by itself within moments.
+- **Reconnect Button**: Saved dice that are currently disconnected now show a dedicated **Reconnect** button in the Hub, and a **Reconnect** shortcut appears in the popup, so you can force an immediate attempt whenever you like.
+- **Disconnected Dice Stay Listed**: Paired dice are remembered (name, type, colorway, last battery) and shown in a dimmed "disconnected" state instead of vanishing, so you always know which dice belong to you.
+
+### Changed
+- **Saved Dice as the Source of Truth**: Pairing a die saves it; the Hub only auto-connects dice you've actually paired (and that the browser still grants), rather than every device the browser has ever seen.
+- **Disconnect Now Means "Remove"**: The ✕ on a die fully forgets it — it disconnects, stops auto-reconnecting, and revokes the browser's Bluetooth permission so it won't silently come back. Transient drops are handled by automatic reconnection instead.
+
+### Fixed
+- **Popup Disconnect**: Disconnecting a die from the popup now actually tears down the live Bluetooth connection in the Hub (previously it only cleared the status display).
+- **Colorway on Reconnect**: A die's colorway is now preserved when it is (re)registered with the background after connecting.
+
 ## Pixels Dice for Roll20 [3.4.0] - 2026-04-08
 
 ### Added

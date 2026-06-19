@@ -1,5 +1,5 @@
 import React, { ReactNode, useEffect } from 'react';
-import { X, Battery, BatteryCharging, SignalHigh, SignalMedium, SignalLow, Settings, Plus, Trash2, Copy, Download, AlertTriangle, CheckCircle, Info } from 'lucide-react';
+import { X, Battery, BatteryCharging, SignalHigh, SignalMedium, SignalLow, Settings, Plus, Trash2, Copy, Download, AlertTriangle, CheckCircle, Info, RefreshCw } from 'lucide-react';
 
 
 // Common UI Components for Pixels Roll20
@@ -225,16 +225,18 @@ export const PhysicalDie: React.FC<{
 export const DieRow: React.FC<{
   die: any,
   onDisconnect?: (id: string) => void,
+  onReconnect?: (id: string) => void,
+  isReconnecting?: boolean,
   showSignal?: boolean,
   className?: string
-}> = ({ die, onDisconnect, showSignal = false, className = "" }) => {
-  const colorwayLabel = die.colorway 
+}> = ({ die, onDisconnect, onReconnect, isReconnecting = false, showSignal = false, className = "" }) => {
+  const colorwayLabel = die.colorway
     ? die.colorway
         .replace(/([A-Z])/g, ' $1') // insert space before capital letters
         .split(/[_\-\ ]/)
         .filter(Boolean)
         .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-        .join(' ') 
+        .join(' ')
     : '';
 
   const typeStr = (die.dieType || 'd20').toLowerCase().replace('pipped', '').replace('d', '');
@@ -242,10 +244,11 @@ export const DieRow: React.FC<{
   const maxVal = typeStr === '00' ? 90 : dSize;
   const isCrit = die.lastResult === maxVal;
   const isFail = die.lastResult === 1;
+  const isDisconnected = die.status === 'disconnected';
 
   return (
-    <div className={`relative bg-card-bg p-4 rounded-xl flex justify-between items-center border border-border-main hover:border-accent transition-all group ${className}`}>
-      <div className="flex items-center gap-4">
+    <div className={`relative bg-card-bg p-4 rounded-xl flex justify-between items-center border transition-all group ${isDisconnected ? 'border-border-main/60 hover:border-accent/60' : 'border-border-main hover:border-accent'} ${className}`}>
+      <div className={`flex items-center gap-4 ${isDisconnected ? 'opacity-50' : ''}`}>
         <PhysicalDie die={die} size={48} className="group-hover:scale-110 transition-transform" />
         <div className="text-left">
           <div className="font-bold text-lg leading-tight flex items-center gap-2">
@@ -255,33 +258,49 @@ export const DieRow: React.FC<{
           {colorwayLabel && <div className="text-[0.7rem] font-bold text-accent uppercase tracking-widest mt-0.5 opacity-60">{colorwayLabel}</div>}
           <div className="text-xs mt-2">
             <span className={`uppercase font-black px-1.5 py-0.5 rounded ${
-              die.status === 'disconnected' ? 'bg-danger/10 text-danger' : 
-              die.isRolling ? 'bg-white/10 animate-rainbow' : 
-              die.lastResult ? (isCrit ? 'bg-white/10 animate-rainbow animate-result-fade' : isFail ? 'bg-red-500/20 text-[#ec1b37] animate-result-fade' : 'bg-white/10 text-white animate-result-fade') : 
+              isReconnecting ? 'bg-accent/10 text-accent' :
+              isDisconnected ? 'bg-danger/10 text-danger' :
+              die.isRolling ? 'bg-white/10 animate-rainbow' :
+              die.lastResult ? (isCrit ? 'bg-white/10 animate-rainbow animate-result-fade' : isFail ? 'bg-red-500/20 text-[#ec1b37] animate-result-fade' : 'bg-white/10 text-white animate-result-fade') :
               die.status === 'crooked' ? 'bg-warning/10 text-warning' : 'bg-text-muted/10 text-text-muted opacity-60'
             }`}>
-              {die.status === 'disconnected' ? 'Disconnected' : 
-               die.isRolling ? 'Rolling' : 
-               die.lastResult ? `Rolled ${die.lastResult}` : 
+              {isReconnecting ? 'Reconnecting' :
+               isDisconnected ? 'Disconnected' :
+               die.isRolling ? 'Rolling' :
+               die.lastResult ? `Rolled ${die.lastResult}` :
                die.status === 'crooked' ? 'Tilted' : 'Ready'}
             </span>
           </div>
         </div>
       </div>
-      
+
       <div className="flex flex-col items-end justify-between self-stretch min-h-[56px]">
         {onDisconnect && (
-          <button 
+          <button
             onClick={() => onDisconnect(die.dieId)}
             className="text-text-muted hover:text-danger hover:scale-110 transition-all opacity-30 group-hover:opacity-100 p-1 -mr-1 -mt-1"
-            title="Disconnect Die"
+            title={isDisconnected ? 'Remove die' : 'Disconnect die'}
           >
             <X size={18} strokeWidth={3} />
           </button>
         )}
         <div className="flex items-center gap-3 mt-auto">
-          <BatteryIcon level={die.battery} isCharging={die.isCharging} />
-          {showSignal && <SignalIcon rssi={die.rssi} />}
+          {isDisconnected && onReconnect ? (
+            <button
+              onClick={() => onReconnect(die.dieId)}
+              disabled={isReconnecting}
+              className="flex items-center gap-1.5 text-[0.7rem] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              title="Reconnect this die"
+            >
+              <RefreshCw size={13} strokeWidth={3} className={isReconnecting ? 'animate-spin' : ''} />
+              {isReconnecting ? 'Connecting' : 'Reconnect'}
+            </button>
+          ) : (
+            <>
+              <BatteryIcon level={die.battery} isCharging={die.isCharging} />
+              {showSignal && <SignalIcon rssi={die.rssi} />}
+            </>
+          )}
         </div>
       </div>
     </div>

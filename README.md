@@ -20,10 +20,16 @@ Then load the `dist/` folder into Chrome as described above.
 ## How It Works
 
 ### Connection Process
-1. Open the extension popup and click **"Connect New Die"**
+1. Open the extension popup and click **"+"** (Add Dice), then **"Pair New Die"** in the Hub
 2. Browser shows Bluetooth device list
-3. Select your Pixels die and confirm
-4. **⚠️ Leave the connection tab open** — it maintains the Bluetooth link with your die
+3. Select your Pixels die and confirm — repeat for as many dice as you like
+4. **⚠️ Leave the Hub tab open** — it maintains the Bluetooth link with your dice
+
+### Reconnecting
+- **Automatic** — Paired dice reconnect on their own while the Hub tab is open. If a die sleeps, drifts out of range, or hiccups, the Hub keeps retrying with a backoff and brings it back as soon as it's available again (for sleeping dice, just give them a shake).
+- **Manual** — A disconnected die stays listed in the Hub (and the popup) with a **Reconnect** button if you'd rather force an immediate attempt.
+- **Removing a die** — Click the **✕** on a die to fully forget it. This disconnects it, stops auto-reconnecting, and revokes its Bluetooth permission so it won't come back on its own.
+- **Across browser restarts** — For dice to be remembered after Chrome fully restarts, enable `chrome://flags/#enable-web-bluetooth-new-permissions-backend` (the Hub shows a reminder if this isn't on).
 
 ### Rolling in Roll20
 1. Open a Roll20 character sheet and **select your character**
