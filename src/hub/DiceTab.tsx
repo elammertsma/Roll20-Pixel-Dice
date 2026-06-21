@@ -193,10 +193,30 @@ const DiceTab: React.FC = () => {
 
   // ---- Connection ----------------------------------------------------------
 
+  // Number of dice currently in a live "ready" connection — used to tell apart a
+  // single out-of-range die from having saturated the adapter's connection slots.
+  const countReadyDice = (): number => {
+    let n = 0;
+    for (const p of activeDiceRef.current.values()) {
+      if (p.status === 'ready') n++;
+    }
+    return n;
+  };
+
   const friendlyError = (error: any): string => {
-    let msg = error?.message || String(error);
-    if (msg.includes('out of range') || msg.includes('code 19') || msg.includes('GATT')) {
-      msg = "Your Pixel is out of range or turned off. Pick it up or give it a shake to wake it, then try again.";
+    const raw = error?.message || String(error);
+    const name = (error?.pixel?.name as string) || '';
+    // BLE error 19 (0x13) is surfaced both for an out-of-range/asleep die and when the
+    // computer's Bluetooth adapter has run out of connection slots — same code, different
+    // cause. Lead with the common case and add a limit hint when several dice are already up.
+    const isConnFailure = /\(19\)|code\s*19|reason\s*19|connection attempt failed|out of range|gatt/i.test(raw);
+    if (!isConnFailure) return raw;
+
+    const prefix = name ? `${name}: ` : '';
+    let msg = `${prefix}Couldn't connect. This usually means the die is out of range or asleep — pick it up or give it a shake to wake it, then try again.`;
+    const connected = countReadyDice();
+    if (connected >= 4) {
+      msg += ` If it's definitely awake and nearby, your computer's Bluetooth may have reached its limit for simultaneous connections (commonly around 7 — you have ${connected} connected right now). That's a hardware limit of the Bluetooth adapter, not the extension; connecting fewer dice or trying a different adapter is the only workaround.`;
     }
     return msg;
   };
