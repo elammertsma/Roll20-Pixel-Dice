@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Pixel } from "@systemic-games/pixels-core-connect";
 import { repeatConnect, getPixel, requestPixel } from "@systemic-games/pixels-web-connect";
-import { Button, Card, DieRow, Modal } from '../components/UI';
-import { Plus, Bluetooth, Info, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Button, Card, DieRow, DieIcon, Modal } from '../components/UI';
+import { Plus, Bluetooth, Info, CheckCircle2, RefreshCw, ArrowLeftRight, Clock } from 'lucide-react';
 
 // Persistent record of a die the user has paired. systemId is the stable per-device
 // id used to (re)connect; the rest is cached so disconnected dice still render nicely.
@@ -20,6 +20,25 @@ const RECONNECT_MIN_DELAY = 3000;
 const RECONNECT_MAX_DELAY = 30000;
 // How often we re-scan granted devices to pick up dice that were woken/brought back in range.
 const REDISCOVER_INTERVAL = 15000;
+// When a connect fails with at least this many dice already connected, the adapter's
+// simultaneous-connection limit is the likely cause, so we offer to swap one out.
+const REPLACE_MIN_CONNECTED = 4;
+
+// BLE error 19 (0x13) is reported both for an out-of-range/asleep die and for a saturated
+// Bluetooth adapter. We use this to tell "real" connection failures from other errors.
+const CONN_FAILURE_RE = /\(19\)|code\s*19|reason\s*19|connection attempt failed|out of range|gatt/i;
+
+// Human-readable "time since last roll" for the replace picker.
+function formatIdle(ts?: number): string {
+  if (!ts) return 'No rolls yet';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 10) return 'Rolled just now';
+  if (s < 60) return `Rolled ${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `Rolled ${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `Rolled ${h}h ago`;
+}
 
 function normalizeSaved(raw: unknown): SavedDie[] {
   if (!Array.isArray(raw)) return [];
@@ -37,6 +56,12 @@ const DiceTab: React.FC = () => {
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const [hubDice, setHubDice] = useState<any[]>([]);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // Replace-a-die flow: pendingReplace remembers the die that just failed to connect (so the
+  // error modal can offer a swap); replaceFlow holds it while the picker modal is open.
+  const [pendingReplace, setPendingReplace] = useState<{ systemId: string; name: string } | null>(null);
+  const [replaceFlow, setReplaceFlow] = useState<{ systemId: string; name: string } | null>(null);
+  const [isSwapping, setIsSwapping] = useState<boolean>(false);
+  const [swappingVictim, setSwappingVictim] = useState<string | null>(null);
 
   const activeDiceRef = useRef(activeDice);
   useEffect(() => { activeDiceRef.current = activeDice; }, [activeDice]);
@@ -51,6 +76,10 @@ const DiceTab: React.FC = () => {
   // Pending backoff timers and the current backoff delay per die.
   const reconnectTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const backoffRef = useRef<Map<string, number>>(new Map());
+  // Dice bumped out to free a connection slot — skip auto-reconnect until the user acts.
+  const parkedRef = useRef<Set<string>>(new Set());
+  // Last roll timestamp per die (session only), used to rank replace candidates.
+  const lastRollRef = useRef<Map<string, number>>(new Map());
 
   const updateUI = useCallback(() => {
     setActiveDice(prev => new Map(prev));
@@ -109,7 +138,7 @@ const DiceTab: React.FC = () => {
   const connectRef = useRef<(systemId: string, manual: boolean) => Promise<boolean>>();
 
   const scheduleReconnect = useCallback((systemId: string) => {
-    if (suppressedRef.current.has(systemId)) return;
+    if (suppressedRef.current.has(systemId) || parkedRef.current.has(systemId)) return;
     if (reconnectTimersRef.current.has(systemId)) return; // already queued
     const delay = backoffRef.current.get(systemId) ?? RECONNECT_MIN_DELAY;
     backoffRef.current.set(systemId, Math.min(delay * 2, RECONNECT_MAX_DELAY));
@@ -127,6 +156,7 @@ const DiceTab: React.FC = () => {
 
     pixel.addEventListener('roll', (faceIndex: number) => {
       console.log('[Pixels Roll20 Hub] 🎲 Roll event received:', faceIndex);
+      lastRollRef.current.set(systemId, Date.now());
       chrome.runtime.sendMessage({
         type: 'diceRoll',
         dieId: dieId(),
@@ -173,7 +203,7 @@ const DiceTab: React.FC = () => {
       } else if (status === 'disconnected') {
         // Unexpected drop: keep the die visible and start trying to get it back,
         // unless the user removed it or we're already mid-attempt.
-        if (!suppressedRef.current.has(systemId) && !reconnectingRef.current.has(systemId)) {
+        if (!suppressedRef.current.has(systemId) && !parkedRef.current.has(systemId) && !reconnectingRef.current.has(systemId)) {
           scheduleReconnect(systemId);
         }
       }
@@ -209,13 +239,12 @@ const DiceTab: React.FC = () => {
     // BLE error 19 (0x13) is surfaced both for an out-of-range/asleep die and when the
     // computer's Bluetooth adapter has run out of connection slots — same code, different
     // cause. Lead with the common case and add a limit hint when several dice are already up.
-    const isConnFailure = /\(19\)|code\s*19|reason\s*19|connection attempt failed|out of range|gatt/i.test(raw);
-    if (!isConnFailure) return raw;
+    if (!CONN_FAILURE_RE.test(raw)) return raw;
 
     const prefix = name ? `${name}: ` : '';
     let msg = `${prefix}Couldn't connect. This usually means the die is out of range or asleep — pick it up or give it a shake to wake it, then try again.`;
     const connected = countReadyDice();
-    if (connected >= 4) {
+    if (connected >= REPLACE_MIN_CONNECTED) {
       msg += ` If it's definitely awake and nearby, your computer's Bluetooth may have reached its limit for simultaneous connections (commonly around 7 — you have ${connected} connected right now). That's a hardware limit of the Bluetooth adapter, not the extension; connecting fewer dice or trying a different adapter is the only workaround.`;
     }
     return msg;
@@ -240,8 +269,9 @@ const DiceTab: React.FC = () => {
       console.log('[Pixels Roll20 Hub] Connecting to:', systemId);
       await repeatConnect(pixel, { retries: 3 });
 
-      // Success: reset backoff and register everywhere.
+      // Success: reset backoff, clear any pending replace prompt, and register everywhere.
       backoffRef.current.delete(systemId);
+      setPendingReplace(null);
       setActiveDice(prev => {
         const next = new Map(prev);
         next.set(systemId, pixel);
@@ -285,8 +315,20 @@ const DiceTab: React.FC = () => {
       return true;
     } catch (error) {
       console.error('[Pixels Roll20] Connection error:', error);
-      if (manual) setConnectError(friendlyError(error));
-      // Keep trying quietly in the background until the die comes back.
+      if (manual) {
+        setConnectError(friendlyError(error));
+        const raw = (error as any)?.message || String(error);
+        if (CONN_FAILURE_RE.test(raw)) {
+          // Remember this die so the error modal can offer to swap it in for a connected one.
+          const name = (error as any)?.pixel?.name
+            || savedRef.current.find(d => d.systemId === systemId)?.name
+            || 'this die';
+          setPendingReplace({ systemId, name });
+        } else {
+          setPendingReplace(null);
+        }
+      }
+      // Keep trying quietly in the background until the die comes back (or a slot frees).
       scheduleReconnect(systemId);
       return false;
     } finally {
@@ -299,17 +341,52 @@ const DiceTab: React.FC = () => {
 
   const handleReconnect = useCallback((systemId: string) => {
     suppressedRef.current.delete(systemId);
+    parkedRef.current.delete(systemId);
     backoffRef.current.delete(systemId);
     connectWithRetry(systemId, true);
   }, [connectWithRetry]);
+
+  // Replace-a-die: disconnect the chosen connected die to free a slot, then connect the
+  // pending one in its place. The bumped die is "parked" (kept paired, shown as disconnected
+  // with a Reconnect button) so auto-reconnect doesn't immediately reclaim the freed slot.
+  // If the new die can't connect after all, the bumped die is restored.
+  const evictAndConnect = useCallback(async (victimSystemId: string, pending: { systemId: string; name: string }) => {
+    setIsSwapping(true);
+    setSwappingVictim(victimSystemId);
+    try {
+      parkedRef.current.add(victimSystemId);
+      clearReconnectTimer(victimSystemId);
+      const victim = activeDiceRef.current.get(victimSystemId);
+      if (victim) {
+        try { await victim.disconnect(); } catch { /* ignore */ }
+      }
+      // Give the controller a moment to actually release the slot.
+      await new Promise(resolve => setTimeout(resolve, 700));
+
+      const ok = await connectWithRetry(pending.systemId, true);
+      setReplaceFlow(null);
+      if (ok) {
+        setPendingReplace(null);
+      } else {
+        // Swap failed (e.g. the new die was out of range after all) — put the bumped die back.
+        parkedRef.current.delete(victimSystemId);
+        connectWithRetry(victimSystemId, false);
+      }
+    } finally {
+      setIsSwapping(false);
+      setSwappingVictim(null);
+    }
+  }, [clearReconnectTimer, connectWithRetry]);
 
   // Forget a die entirely: disconnect, stop auto-reconnecting, drop it from
   // storage and revoke the browser permission so it isn't rediscovered.
   const handleForget = useCallback(async (systemId: string) => {
     suppressedRef.current.add(systemId);
+    parkedRef.current.delete(systemId);
     clearReconnectTimer(systemId);
     backoffRef.current.delete(systemId);
     listenersAttachedRef.current.delete(systemId);
+    lastRollRef.current.delete(systemId);
 
     const pixel = activeDiceRef.current.get(systemId);
     const savedEntry = savedRef.current.find(d => d.systemId === systemId);
@@ -389,7 +466,7 @@ const DiceTab: React.FC = () => {
     }
 
     for (const systemId of savedIds) {
-      if (suppressedRef.current.has(systemId)) continue;
+      if (suppressedRef.current.has(systemId) || parkedRef.current.has(systemId)) continue;
       if (!grantedIds.has(systemId)) continue; // permission no longer present
       const existing = activeDiceRef.current.get(systemId);
       if (existing && existing.status === 'ready') continue;
@@ -490,6 +567,20 @@ const DiceTab: React.FC = () => {
     return { systemId, die, isReconnecting };
   });
 
+  // Connected dice that could be bumped to make room, longest-idle first. The currently
+  // swapping victim is kept in the list so its spinner stays visible during the handoff.
+  const replaceCandidates = Array.from(activeDice.entries())
+    .filter(([systemId, pixel]) => pixel.status === 'ready' || systemId === swappingVictim)
+    .map(([systemId, pixel]) => ({
+      systemId,
+      name: pixel.name || saved.find(d => d.systemId === systemId)?.name || 'Pixels Die',
+      dieType: (pixel as any).dieType || saved.find(d => d.systemId === systemId)?.dieType || 'd20',
+      lastRoll: lastRollRef.current.get(systemId)
+    }))
+    .sort((a, b) => (a.lastRoll ?? 0) - (b.lastRoll ?? 0));
+
+  const canReplace = !!pendingReplace && countReadyDice() >= REPLACE_MIN_CONNECTED;
+
   return (
     <div className="space-y-12">
       <header className="flex justify-between items-end">
@@ -549,9 +640,64 @@ const DiceTab: React.FC = () => {
         onClose={() => setConnectError(null)}
         title="Connection Error"
         variant="warning"
-        actions={<Button onClick={() => setConnectError(null)}>Got it</Button>}
+        actions={
+          canReplace ? (
+            <>
+              <Button
+                onClick={() => { const p = pendingReplace; setConnectError(null); setReplaceFlow(p); }}
+                className="gap-2"
+              >
+                <ArrowLeftRight size={16} /> Replace a die…
+              </Button>
+              <Button variant="secondary" onClick={() => setConnectError(null)}>Not now</Button>
+            </>
+          ) : (
+            <Button onClick={() => setConnectError(null)}>Got it</Button>
+          )
+        }
       >
         <p>{connectError}</p>
+      </Modal>
+
+      <Modal
+        isOpen={!!replaceFlow}
+        onClose={() => { if (!isSwapping) setReplaceFlow(null); }}
+        title="Replace a die"
+        variant="info"
+        actions={<Button variant="secondary" onClick={() => setReplaceFlow(null)} disabled={isSwapping}>Cancel</Button>}
+      >
+        <p className="mb-4">
+          Your Bluetooth adapter is at its connection limit. Choose a connected die to disconnect so{' '}
+          <b className="text-text-main">{replaceFlow?.name}</b> can take its place. The die you pick stays paired —
+          you can reconnect it any time from the list.
+        </p>
+        <div className="space-y-2">
+          {replaceCandidates.length === 0 ? (
+            <p className="text-text-muted italic text-sm">No connected dice available to replace.</p>
+          ) : (
+            replaceCandidates.map(({ systemId, name, dieType, lastRoll }) => (
+              <button
+                key={systemId}
+                onClick={() => replaceFlow && evictAndConnect(systemId, replaceFlow)}
+                disabled={isSwapping}
+                className="w-full flex items-center gap-3 p-3 rounded-xl bg-white/2 border border-white/5 hover:border-accent hover:bg-accent/5 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed group"
+              >
+                <DieIcon type={dieType} size={32} className="text-text-muted group-hover:text-accent transition-colors shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold leading-tight truncate">{name}</div>
+                  <div className="text-[0.7rem] text-text-muted uppercase tracking-wider flex items-center gap-1.5 mt-0.5">
+                    <Clock size={11} /> {formatIdle(lastRoll)}
+                  </div>
+                </div>
+                {swappingVictim === systemId ? (
+                  <RefreshCw size={16} className="animate-spin text-accent shrink-0" />
+                ) : (
+                  <ArrowLeftRight size={16} className="text-text-muted opacity-40 group-hover:opacity-100 group-hover:text-accent transition-all shrink-0" />
+                )}
+              </button>
+            ))
+          )}
+        </div>
       </Modal>
     </div>
   );

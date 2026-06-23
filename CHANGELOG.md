@@ -12,6 +12,7 @@ Connection refactor focused on making dice connect, stay connected, and reconnec
 - **Periodic Rediscovery**: The Hub re-scans your saved dice every few seconds, so a die that you turn on (or shake awake) after opening the Hub connects by itself within moments.
 - **Reconnect Button**: Saved dice that are currently disconnected now show a dedicated **Reconnect** button in the Hub, and a **Reconnect** shortcut appears in the popup, so you can force an immediate attempt whenever you like.
 - **Disconnected Dice Stay Listed**: Paired dice are remembered (name, type, colorway, last battery) and shown in a dimmed "disconnected" state instead of vanishing, so you always know which dice belong to you.
+- **Replace-a-Die Picker**: If a new die can't connect because your Bluetooth adapter has hit its simultaneous-connection limit (commonly ~7), the connection error now offers **Replace a die…**. Pick one of your connected dice — sorted by how long ago it was last rolled — to bump out and hand its slot to the new die. The bumped die stays paired and is shown disconnected with a Reconnect button; if the new die can't connect after all, the bumped die is automatically restored.
 
 ### Changed
 - **Saved Dice as the Source of Truth**: Pairing a die saves it; the Hub only auto-connects dice you've actually paired (and that the browser still grants), rather than every device the browser has ever seen.
