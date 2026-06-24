@@ -245,10 +245,13 @@ export const DieRow: React.FC<{
   const isCrit = die.lastResult === maxVal;
   const isFail = die.lastResult === 1;
   const isDisconnected = die.status === 'disconnected';
+  // While offline (disconnected or actively reconnecting) the battery/signal readings are
+  // stale, so we hide them and show connection state instead.
+  const offline = isDisconnected || isReconnecting;
 
   return (
-    <div className={`relative bg-card-bg p-4 rounded-xl flex justify-between items-center border transition-all group ${isDisconnected ? 'border-border-main/60 hover:border-accent/60' : 'border-border-main hover:border-accent'} ${className}`}>
-      <div className={`flex items-center gap-4 ${isDisconnected ? 'opacity-50' : ''}`}>
+    <div className={`relative bg-card-bg p-4 rounded-xl flex justify-between items-center border transition-all group ${offline ? 'border-border-main/60 hover:border-accent/60' : 'border-border-main hover:border-accent'} ${className}`}>
+      <div className={`flex items-center gap-4 ${offline ? 'opacity-50' : ''}`}>
         <PhysicalDie die={die} size={48} className="group-hover:scale-110 transition-transform" />
         <div className="text-left">
           <div className="font-bold text-lg leading-tight flex items-center gap-2">
@@ -279,22 +282,24 @@ export const DieRow: React.FC<{
           <button
             onClick={() => onDisconnect(die.dieId)}
             className="text-text-muted hover:text-danger hover:scale-110 transition-all opacity-30 group-hover:opacity-100 p-1 -mr-1 -mt-1"
-            title={isDisconnected ? 'Remove die' : 'Disconnect die'}
+            title={offline ? 'Remove die' : 'Disconnect die'}
           >
             <X size={18} strokeWidth={3} />
           </button>
         )}
         <div className="flex items-center gap-3 mt-auto">
-          {isDisconnected && onReconnect ? (
-            <button
-              onClick={() => onReconnect(die.dieId)}
-              disabled={isReconnecting}
-              className="flex items-center gap-1.5 text-[0.7rem] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              title="Reconnect this die"
-            >
-              <RefreshCw size={13} strokeWidth={3} className={isReconnecting ? 'animate-spin' : ''} />
-              {isReconnecting ? 'Connecting' : 'Reconnect'}
-            </button>
+          {offline ? (
+            onReconnect && (
+              <button
+                onClick={() => onReconnect(die.dieId)}
+                disabled={isReconnecting}
+                className="flex items-center gap-1.5 text-[0.7rem] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                title="Reconnect this die"
+              >
+                <RefreshCw size={13} strokeWidth={3} className={isReconnecting ? 'animate-spin' : ''} />
+                {isReconnecting ? 'Connecting' : 'Reconnect'}
+              </button>
+            )
           ) : (
             <>
               <BatteryIcon level={die.battery} isCharging={die.isCharging} />

@@ -21,6 +21,7 @@ Connection refactor focused on making dice connect, stay connected, and reconnec
 ### Fixed
 - **Popup Disconnect**: Disconnecting a die from the popup now actually tears down the live Bluetooth connection in the Hub (previously it only cleared the status display).
 - **Colorway on Reconnect**: A die's colorway is now preserved when it is (re)registered with the background after connecting.
+- **No Stale Readings When Offline**: A disconnected or reconnecting die no longer shows a (stale) battery level or signal strength — it shows its connection state instead.
 
 ## Pixels Dice for Roll20 [3.4.0] - 2026-04-08
 
