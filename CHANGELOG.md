@@ -3,16 +3,16 @@
 
 All notable changes to this project are documented in this file.
 
-## Pixels Dice for Roll20 [3.5.0] - 2026-06-19
+## Pixels Dice for Roll20 [3.5.5] - 2026-06-23
 
 Connection refactor focused on making dice connect, stay connected, and reconnect with as little effort as possible.
 
 ### Added
-- **Automatic Reconnection**: When a die drops (sleeps, goes out of range, or has a Bluetooth hiccup) the Hub now keeps it visible and quietly reconnects on its own using an exponential backoff. No more reopening the Hub or re-pairing for a die that briefly disconnected.
-- **Periodic Rediscovery**: The Hub re-scans your saved dice every few seconds, so a die that you turn on (or shake awake) after opening the Hub connects by itself within moments.
+- **Automatic Reconnection**: When a die drops (sleeps, goes out of range, or has a Bluetooth hiccup) the Hub now keeps it visible and quietly reconnects on its own using an exponential backoff. This should result in less re-pairing for dice that briefly disconnected.
+- **Periodic Rediscovery**: The Hub re-scans your saved dice every few seconds, so a die that you turn on (or shake awake) after opening the Hub quickly connects by itself.
 - **Reconnect Button**: Saved dice that are currently disconnected now show a dedicated **Reconnect** button in the Hub, and a **Reconnect** shortcut appears in the popup, so you can force an immediate attempt whenever you like.
 - **Disconnected Dice Stay Listed**: Paired dice are remembered (name, type, colorway, last battery) and shown in a dimmed "disconnected" state instead of vanishing, so you always know which dice belong to you.
-- **Replace-a-Die Picker**: If a new die can't connect because your Bluetooth adapter has hit its simultaneous-connection limit (commonly ~7), the connection error now offers **Replace a die…**. Pick one of your connected dice — sorted by how long ago it was last rolled — to bump out and hand its slot to the new die. The bumped die stays paired and is shown disconnected with a Reconnect button; if the new die can't connect after all, the bumped die is automatically restored.
+- **[Experimental] Replace-a-Die Picker**: If a new die can't connect because your Bluetooth adapter has hit its simultaneous-connection limit (commonly ~7), the connection error now offers **Replace a die…**. Pick one of your connected dice (sorted by how long ago it was last rolled) to bump out and hand its slot to the new die. The bumped die stays paired and is shown disconnected with a Reconnect button; if the new die can't connect after all, the bumped die is automatically restored.
 
 ### Changed
 - **Saved Dice as the Source of Truth**: Pairing a die saves it; the Hub only auto-connects dice you've actually paired (and that the browser still grants), rather than every device the browser has ever seen.
