@@ -102,21 +102,23 @@ export const TextArea: React.FC<{
   />
 );
 
-export const BatteryIcon: React.FC<{ level: number, isCharging?: boolean }> = ({ level, isCharging }) => {
+export const BatteryIcon: React.FC<{ level: number, isCharging?: boolean, inactive?: boolean }> = ({ level, isCharging, inactive }) => {
   let batteryClass = 'bg-success';
   if (level <= 20) batteryClass = 'bg-danger';
   else if (level <= 50) batteryClass = 'bg-warning';
-  
+
   if (isCharging) batteryClass = 'bg-[#00bcd4]';
 
   return (
-    <div className="flex items-center gap-2 text-[0.8rem] text-text-muted">
-      <span>{Math.round(level)}%</span>
+    <div className={`flex items-center gap-2 text-[0.8rem] text-text-muted ${inactive ? 'opacity-40' : ''}`}>
+      <span>{inactive ? '–' : `${Math.round(level)}%`}</span>
       <div className="w-7 h-3.5 border-1.5 border-border-main rounded-[2px] relative p-[1px]">
-        <div 
-          className={`h-full rounded-[1px] transition-all duration-300 ${batteryClass}`} 
-          style={{ width: `${level}%` }}
-        ></div>
+        {!inactive && (
+          <div
+            className={`h-full rounded-[1px] transition-all duration-300 ${batteryClass}`}
+            style={{ width: `${level}%` }}
+          ></div>
+        )}
         <div className="absolute -right-1 top-[3px] w-[3px] h-[6px] bg-border-main rounded-r-[1px]"></div>
       </div>
     </div>
@@ -288,16 +290,22 @@ export const DieRow: React.FC<{
           </button>
         )}
         <div className="flex items-center gap-3 mt-auto">
-          {offline ? (
+          {isReconnecting ? (
+            // Reconnecting: the tile already says "Reconnecting" on the left, so just show
+            // grayed-out (empty) battery/signal here rather than a distracting spinner.
+            <>
+              <BatteryIcon level={die.battery} isCharging={die.isCharging} inactive />
+              {showSignal && <SignalIcon rssi={die.rssi} inactive />}
+            </>
+          ) : isDisconnected ? (
             onReconnect && (
               <button
                 onClick={() => onReconnect(die.dieId)}
-                disabled={isReconnecting}
-                className="flex items-center gap-1.5 text-[0.7rem] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 text-[0.7rem] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
                 title="Reconnect this die"
               >
-                <RefreshCw size={13} strokeWidth={3} className={isReconnecting ? 'animate-spin' : ''} />
-                {isReconnecting ? 'Connecting' : 'Reconnect'}
+                <RefreshCw size={13} strokeWidth={3} />
+                Reconnect
               </button>
             )
           ) : (
@@ -312,28 +320,32 @@ export const DieRow: React.FC<{
   );
 };
 
-export const SignalIcon: React.FC<{ rssi?: number, size?: number }> = ({ rssi, size = 16 }) => {
-  if (rssi === undefined) return null;
-  
+export const SignalIcon: React.FC<{ rssi?: number, size?: number, inactive?: boolean }> = ({ rssi, size = 16, inactive }) => {
+  if (rssi === undefined && !inactive) return null;
+
   let color = 'bg-success';
   let bars = 4;
-  
-  if (rssi < -85) {
-    color = 'bg-danger';
-    bars = 1;
-  } else if (rssi < -75) {
-    color = 'bg-warning';
-    bars = 2;
-  } else if (rssi < -65) {
-    bars = 3;
+
+  if (rssi !== undefined) {
+    if (rssi < -85) {
+      color = 'bg-danger';
+      bars = 1;
+    } else if (rssi < -75) {
+      color = 'bg-warning';
+      bars = 2;
+    } else if (rssi < -65) {
+      bars = 3;
+    }
   }
-  
+
+  if (inactive) bars = 0; // all bars gray (empty)
+
   return (
-    <div className="flex items-end gap-[2px]" style={{ height: size, width: size }}>
+    <div className={`flex items-end gap-[2px] ${inactive ? 'opacity-40' : ''}`} style={{ height: size, width: size }}>
       {[1, 2, 3, 4].map(b => (
-        <div 
-          key={b} 
-          className={`w-[3px] rounded-t-[1px] transition-all ${b <= bars ? color : 'bg-border-main'}`} 
+        <div
+          key={b}
+          className={`w-[3px] rounded-t-[1px] transition-all ${b <= bars ? color : 'bg-border-main'}`}
           style={{ height: `${(b / 4) * 100}%` }}
         />
       ))}
