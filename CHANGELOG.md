@@ -16,7 +16,7 @@ Connection refactor focused on making dice connect, stay connected, and reconnec
 
 ### Changed
 - **Saved Dice as the Source of Truth**: Pairing a die saves it; the Hub only auto-connects dice you've actually paired (and that the browser still grants), rather than every device the browser has ever seen.
-- **Disconnect Now Means "Remove"**: The ✕ on a die fully forgets it — it disconnects, stops auto-reconnecting, and revokes the browser's Bluetooth permission so it won't silently come back. Transient drops are handled by automatic reconnection instead.
+- **Disconnect Now Means "Remove"**: The ✕ on a die fully forgets it: it disconnects, stops auto-reconnecting, and revokes the browser's Bluetooth permission so it won't silently come back. Transient drops are handled by automatic reconnection instead.
 
 ### Fixed
 - **Popup Disconnect**: Disconnecting a die from the popup now actually tears down the live Bluetooth connection in the Hub (previously it only cleared the status display).
